@@ -1,0 +1,263 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+library('Seurat')
+library(tidyverse)
+```
+
+```{r}
+NML_1 <- Read10X(data.dir = "/Users/bhava/Downloads/GSE132771_RAW/NM1")
+NML_2 <- Read10X(data.dir = "/Users/bhava/Downloads/GSE132771_RAW/NML2")
+NML_3 <- Read10X(data.dir = "/Users/bhava/Downloads/GSE132771_RAW/NML3")
+```
+
+```{r}
+NML_1 <- CreateSeuratObject(counts = NML_1, project = "NML_1", min.cells = 3, min.features = 200)
+NML_2 <- CreateSeuratObject(counts = NML_2, project = "NML_2", min.cells = 3, min.features = 200)
+NML_3 <- CreateSeuratObject(counts = NML_3, project = "NML_3", min.cells = 3, min.features = 200)
+```
+
+```{r}
+NML_1
+```
+
+```{r}
+colnames(NML_1)
+rownames(NML_1)
+```
+
+
+```{r}
+# for metadata
+view(NML_1)
+```
+
+```{r}
+# Merge Objects
+
+MergedNML <- merge(NML_1, y = c(NML_2, NML_3),
+                   add.cell.ids = ls()[1:3],
+                   project = 'MergedNML')
+```
+
+
+```{r}
+view(MergedNML)
+```
+
+#Pre-Processing
+##1 QC
+##2 Data Normalization
+##3 Feature Selection (Finding Highly Varible Features)
+
+
+### QC
+
+Low Quality Cells have Low feature and Count_Rna. We need to filter that.
+
+Low Quality Cells often have high percentage of mitochodrial genes
+
+```{r}
+range(MergedNML$nFeature_RNA)
+range(MergedNML$nCount_RNA)
+```
+
+Adding Percentage of Mitochondrial genes
+```{r}
+MergedNML <- PercentageFeatureSet(MergedNML, pattern = "^MT-", col.name = "percent.mt")
+view(MergedNML)
+range(MergedNML$percent.mt)
+```
+```{r}
+view(MergedNML)
+```
+
+```{r}
+range(MergedNML$percent.mt)
+```
+
+```{r Visualizing the Distribution}
+VlnPlot(MergedNML, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+
+```{r}
+MergedNML <- subset(MergedNML, subset = nFeature_RNA > 500 & nFeature_RNA < 4000 & nCount_RNA < 20000 & percent.mt < 10)
+```
+
+```{r}
+MergedNML
+```
+```{r}
+VlnPlot(MergedNML, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+
+### Data Normalization
+
+```{r}
+MergedNML <- NormalizeData(MergedNML, normalization.method = "LogNormalize", scale.factor = 10000 )
+```
+
+#### Feature Selection
+```{r Find Highly Variable Features}
+
+MergedNML <- FindVariableFeatures(MergedNML, selection.method = "vst", nfeatures = 2000)
+
+MergedNML
+```
+We do this to find features which have high expression in some cells and no expression in some cells
+
+#### Data Scaling
+
+We Usually run scaling the most varianble features.
+```{r}
+MergedNML <- ScaleData(MergedNML) # 2000 Identified Variable Features
+
+all.genes <- rownames(MergedNML)
+
+MergedNML <- ScaleData(MergedNML, features = all.genes)
+
+View(MergedNML@commands)
+
+```
+
+### Dimensionality Reduction
+
+```{r}
+MergedNML <-RunPCA(MergedNML)
+```
+```{r}
+DimPlot(MergedNML, reduction = "pca", dims = c(1,2))
+```
+```{r}
+DimPlot(MergedNML, reduction = "pca", dims = c(1,10))
+```
+```{r}
+ElbowPlot(MergedNML)
+```
+We use Elbow Plot to determine how many PCs did it take to capture majority of the signal. In this case, We can see that the first 9 PCs explain majority of the signal
+
+```{r}
+ElbowPlot(MergedNML, ndims = 50, reduction = "pca")
+```
+### Clustering
+```{r}
+#Takes first 20 PCs as Input from previous PCA and find features with similar Expression Pattern
+MergedNML <- FindNeighbors(MergedNML, dims = 1:20)
+
+MergedNML <- FindClusters(MergedNML, resolution = 0.1)
+
+```
+First we use 0.1 resolution which gives us 11 clusters so increase the resolution to 0.3 to find more clusters
+
+```{r}
+MergedNML <- FindClusters(MergedNML, resolution = 0.3)
+```
+#### Run  non-linear Dimensional reducation (UMAP)
+```{r}
+MergedNML <- RunUMAP(MergedNML, dims = 1:20)
+
+DimPlot(MergedNML, reduction = "umap", label = TRUE, repel = TRUE)
+```
+
+#### Finding Marker Genes
+```{r}
+MergedNML <- JoinLayers(MergedNML)
+
+# Now find markers aka Differential expression analysis
+MergedNML_markers <- FindAllMarkers(MergedNML, 
+                                     only.pos = TRUE,
+                                     min.pct = 0.25,
+                                     logfc.threshold = 0.25)
+
+# View results
+View(MergedNML_markers)
+```
+
+#### Top 10 marked genes
+```{r}
+
+top10 <- MergedNML_markers %>%
+  group_by(cluster) %>%
+  slice_max(n = 10, order_by = avg_log2FC)
+
+View(top10)
+```
+
+#### Top 3
+```{r}
+MergedNML_markers %>%
+  group_by(cluster) %>%
+  slice_max(n = 3, order_by = avg_log2FC) %>%
+  select(cluster, gene) %>%
+  group_by(cluster) %>%
+  summarize(top_genes = paste(gene, collapse = ", "))
+```
+#### Marker gene verification
+```{r}
+# Verify your top markers visually
+FeaturePlot(MergedNML, features = c(
+  "SFTPA2",   
+  "CD3D",     
+  "S100A8", 
+  "ACKR1",  
+  "KLRF1",  
+  "LUM",    
+  "APOE",   
+  "ACTG2"   
+))
+```
+
+#### Find fold change values
+```{r}
+MergedNML_markers %>%
+  group_by(cluster) %>%
+  slice_max(n = 3, order_by = avg_log2FC) %>%
+  select(cluster, gene, avg_log2FC) %>%
+  print(n = 54) 
+```
+
+#### Annotaation
+```{r}
+new.cluster.ids <- c(
+  "Monocytes",                # 0
+  "Alveolar Macrophages",     # 1
+  "Alveolar Epithelial",      # 2
+  "Vascular Endothelial",     # 3
+  "Alveolar Type 2",          # 4
+  "Fibroblasts",              # 5
+  "Dendritic Cells",          # 6
+  "T Cells",                  # 7
+  "NK Cells",                 # 8
+  "Smooth Muscle",            # 9
+  "Mesothelial",              # 10
+  "Macrophages",              # 11
+  "Rare Epithelial",          # 12
+  "B Cells",                  # 13
+  "Mast Cells",               # 14
+  "Proliferating",            # 15
+  "Stromal",                  # 16
+  "Ciliated/Lymphatic"        # 17
+)
+
+names(new.cluster.ids) <- levels(Idents(MergedNML))
+MergedNML <- RenameIdents(MergedNML, new.cluster.ids)
+
+# Save annotated object
+MergedNML$cell_type <- Idents(MergedNML)
+
+# Plot final annotated UMAP
+DimPlot(MergedNML, reduction = "umap", label = TRUE, pt.size = 0.5, label.size = 3) +
+  ggtitle("Healthy Lung Cell Atlas - Annotated") +
+  theme(plot.title = element_text(hjust = 0.5, size = 16, face = "bold"))
+
+
+```
+
+```{r}
+total_cells <- ncol(MergedNML)
+print(paste("Total cells analyzed:", total_cells))
+
+```
+
